@@ -1,0 +1,26 @@
+# Build artifacts
+build/
+out/
+target/
+*.class
+*.jar
+
+# Generated reports / outputs
+output/
+
+# IDE
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+.project
+.classpath
+.settings/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
