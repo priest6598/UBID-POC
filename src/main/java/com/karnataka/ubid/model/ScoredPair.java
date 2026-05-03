@@ -23,6 +23,7 @@ public record ScoredPair(
 
     public record FeatureContribution(
             String featureName,
+            String tierKey,           // e.g. "name.high", "pin.agree" — which tier this observation fell into
             String observation,
             double logOddsContribution
     ) {}

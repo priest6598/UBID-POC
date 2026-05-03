@@ -4,9 +4,9 @@ A working prototype of the **Unique Business Identifier (UBID)** and **Active Bu
 
 The platform reconciles fragmented business records across 40+ Karnataka department systems (Shop Establishment, Factories, KSPCB, BWSSB, …) into a single canonical identifier per real-world business, then classifies each business as Active / Dormant / Closed using ongoing transaction events.
 
-This POC implements the full pipeline end-to-end against synthetic data:
+This POC implements the full pipeline end-to-end against synthetic data — including a working **active-learning loop** that takes reviewer decisions and updates the matcher's parameters:
 
-> **45 mock source records → 26 UBIDs → 10 multi-system clusters resolved → activity status assigned to every UBID with evidence trail.**
+> **45 source records → 1 ambiguous pair flagged for review → reviewer marks it non-match → trainer updates 20 tier weights via Bayesian update → re-scoring drops the pair from REVIEW (p=0.75) to NO_LINK (p=0.64).**
 
 ---
 
@@ -42,23 +42,32 @@ The script compiles all sources to `build/`, runs `com.karnataka.ubid.Main`, and
 ## Pipeline
 
 ```
-┌─────────────────────┐      ┌──────────────────┐      ┌──────────────────┐
-│ 1. Ingestion        │ ───▶ │ 2. PII Scramble  │ ───▶ │ 3. Blocking      │
-│ 4 mock dept systems │      │ HMAC-SHA256 FPE  │      │ Union of blocks  │
-└─────────────────────┘      └──────────────────┘      └──────────────────┘
-                                                                │
-                                                                ▼
-┌─────────────────────┐      ┌──────────────────┐      ┌──────────────────┐
-│ 7. HTML/JSON report │ ◀─── │ 6. Activity      │ ◀─── │ 4. Probabilistic │
-│ + review queue      │      │ Classification   │      │    Matching      │
-└─────────────────────┘      └──────────────────┘      └──────────────────┘
-                                       ▲                        │
-                                       │                        ▼
-                              ┌──────────────────┐      ┌──────────────────┐
-                              │  Activity events │      │ 5. UBID Registry │
-                              │  (synth, 12 mo)  │      │ Union-find +     │
-                              └──────────────────┘      │ UUID v5          │
-                                                        └──────────────────┘
+┌─────────────────────┐    ┌──────────────────┐    ┌──────────────────┐
+│ 1. Ingestion        │ ─▶ │ 2. PII Scramble  │ ─▶ │ 3. Blocking      │
+│ 4 mock dept systems │    │ HMAC-SHA256 FPE  │    │ Union of blocks  │
+└─────────────────────┘    └──────────────────┘    └──────────────────┘
+                                                            │
+                                                            ▼
+┌─────────────────────┐    ┌──────────────────┐    ┌──────────────────┐
+│ 8. HTML/JSON report │ ◀─ │ 7. Activity      │ ◀─ │ 4. Probabilistic │
+│ + review queue      │    │ Classification   │    │    Matching      │
+│ + active-learning   │    └──────────────────┘    │    (Round 1)     │
+│   diff              │                            └──────────────────┘
+└─────────────────────┘                                     │
+        ▲                                                   ▼
+        │                                          ┌──────────────────┐
+        │                                          │ 5. UBID Registry │
+        │                                          │    (Round 1)     │
+        │                                          └──────────────────┘
+        │                                                   │
+        │                                                   ▼
+        │                                          ┌──────────────────┐
+        │                                          │ 6. ACTIVE        │
+        └─ Round 2 re-score with updated params ◀── │    LEARNING:     │
+           (review queue shrinks)                   │ Reviewer →       │
+                                                    │ MU update        │
+                                                    │ (Bayesian Beta)  │
+                                                    └──────────────────┘
 ```
 
 ### 1. Ingestion ([data/MockDataGenerator.java](src/main/java/com/karnataka/ubid/data/MockDataGenerator.java))
@@ -121,7 +130,44 @@ Union-find clustering over AUTO_LINK pairs only (REVIEW pairs are queued, **neve
 
 UUID v5 is real SHA-1-based and RFC 4122 compliant (Java's built-in `UUID.nameUUIDFromBytes` is v3/MD5, so v5 is implemented manually). The PAN-anchored property means: when a currently-internal UBID later gains a PAN, it can be **promoted** to the same PAN-anchored ID without re-issuing identifiers downstream.
 
-### 6. Activity Events & Classification
+### 6. Active Learning Loop ([learning/ActiveLearningTrainer.java](src/main/java/com/karnataka/ubid/learning/ActiveLearningTrainer.java) + [learning/MUParams.java](src/main/java/com/karnataka/ubid/learning/MUParams.java))
+
+This is what closes the feedback loop from reviewers back to the model.
+
+**The flow:**
+
+1. **Capture** — Every reviewer decision is stored as a `ReviewerDecision` record with `(left, right, verdict, reviewerId, timestamp, note)`. These are immutable audit records.
+2. **Re-estimate (m, u) per tier** — For every (feature, tier) pair (e.g. `name.high`, `pin.disagree`, `metaphone.match`), count how often that tier was hit among confirmed-match pairs and confirmed-non-match pairs. Update via **conjugate-Beta updating**:
+
+   ```
+     m_new = (priorStrength · m_current + match_hits)        / (priorStrength + total_matches)
+     u_new = (priorStrength · u_current + nonmatch_hits)     / (priorStrength + total_nonmatches)
+   ```
+
+   The current `(m, u)` becomes the prior; reviewer-labelled tier hits are the observations. With small labelled sets the prior dominates (protects against overfit); as the labelled set grows the empirical observations take over.
+
+3. **Re-score** — All previously scored pairs are re-evaluated with the updated `MUParams`. Pairs whose probability now falls outside their original decision band are flipped (REVIEW → AUTO_LINK or REVIEW → NO_LINK). The proposal calls this "review-queue shrinkage" — projected ~40% reduction over 3 production months.
+
+**Demo of the loop in action:**
+
+| Stage | Count |
+|---|---|
+| Round 1 review queue | 1 pair (Ravi Auto Parts vs Ravi Auto Spares, p=0.7462) |
+| Reviewer decisions captured | 32 (15 confirmed match, 17 confirmed non-match) |
+| Tier weights updated | 20 of 21 tiers received labelled hits |
+| Round 2 review queue | **0 pairs** — Ravi pair flipped to NO_LINK (p=0.6445) |
+
+What the trainer learned from this batch:
+- `pin.disagree` log-odds fell from −2.97 to −3.71 (more punitive when pin codes differ)
+- `pin.agree` log-odds dropped from +3.86 to +1.13 (less generous when pin matches alone)
+- `address.moderate` weakened (matched non-matches frequently shared this tier)
+- `name_phonetic.match` strengthened (15 confirmed matches all had it; only 1 non-match did)
+
+The `(reviewer-decisions.json, training-result.json)` outputs preserve the full audit trail, and the HTML report renders the per-tier delta table inline.
+
+In production, this loop runs weekly: the entire reviewer-decision log from the past week is replayed through the trainer, the threshold curve is recomputed, and a new `MUParams` snapshot is committed.
+
+### 7. Activity Events & Classification
 
 [activity/ActivityEventGenerator.java](src/main/java/com/karnataka/ubid/activity/ActivityEventGenerator.java) synthesises 12 months of events per record across `RENEWAL`, `INSPECTION`, `CONSUMPTION`, `FILING`, `CLOSURE`, `ADDRESS_CHANGE` based on a hidden ground-truth label.
 
@@ -136,12 +182,14 @@ UUID v5 is real SHA-1-based and RFC 4122 compliant (Java's built-in `UUID.nameUU
 
 Every verdict carries the evidence event timeline.
 
-### 7. Reports ([report/HtmlReportGenerator.java](src/main/java/com/karnataka/ubid/report/HtmlReportGenerator.java) + [report/JsonWriter.java](src/main/java/com/karnataka/ubid/report/JsonWriter.java))
+### 8. Reports ([report/HtmlReportGenerator.java](src/main/java/com/karnataka/ubid/report/HtmlReportGenerator.java) + [report/JsonWriter.java](src/main/java/com/karnataka/ubid/report/JsonWriter.java))
 
-- `output/ubid-report.html` — full visual demo (cluster cards, evidence drawers, review queue, status badges)
+- `output/ubid-report.html` — full visual demo (cluster cards, evidence drawers, review queue, active learning section, status badges)
 - `output/ubid-registry.json` — final registry with members per UBID
 - `output/activity-classifications.json` — UBID → status + reasoning + evidence
 - `output/review-queue.json` — pairs awaiting human review with per-feature evidence
+- `output/reviewer-decisions.json` — captured reviewer decisions (immutable audit log)
+- `output/training-result.json` — per-tier (m, u) before/after with hit counts
 
 ---
 
@@ -155,10 +203,11 @@ ubid-poc/
 ├── output/                         # generated reports (gitignored)
 └── src/main/java/com/karnataka/ubid/
     ├── Main.java                   # pipeline orchestrator
-    ├── model/                      # records: BusinessRecord, ActivityEvent, ScoredPair, ActivityStatus
+    ├── model/                      # records: BusinessRecord, ActivityEvent, ScoredPair, ActivityStatus, ReviewerDecision
     ├── data/                       # MockDataGenerator
     ├── scrambling/                 # PIIScrambler
     ├── matching/                   # BlockingEngine, ProbabilisticMatcher, StringSimilarity, Metaphone
+    ├── learning/                   # MUParams, ActiveLearningTrainer (Bayesian update)
     ├── ubid/                       # UBIDGenerator (UUID v5), UBIDRegistry (union-find)
     ├── activity/                   # ActivityEventGenerator, ActivityClassifier
     └── report/                     # HtmlReportGenerator, JsonWriter
@@ -187,26 +236,29 @@ ubid-poc/
   Full cartesian space  : 990 pairs
   Candidate pairs after blocking: 560  (reduction: 43.43%)
 
-══ Stage 4 — Probabilistic Matching (Fellegi-Sunter) ══
-  AUTO_LINK : 31   REVIEW : 1   NO_LINK : 528
+══ Stage 4 — Probabilistic Matching (Round 1, default MU params) ══
+  AUTO_LINK : 30   REVIEW : 1   NO_LINK : 529
 
-══ Stage 5 — UBID Assignment ══
-  UBIDs issued       : 26
-  Multi-record UBIDs : 10  (cross-system duplicates resolved)
-  PAN-anchored UBIDs : 21
-  Review queue       : 1 pair(s)
+══ Stage 5 — UBID Assignment (Round 1) ══
+  [Round 1] UBIDs=27  multi-record=9  PAN-anchored=21  review-queue=1
 
-  Top resolved entities:
-    UBID-2cd1af2a-0c14-531b-9237-06810fbfb40a  (4 records, PAN-anchored)
-       └─ [BWSSB] Vikram Manufacturing
-       └─ [FACTORIES] Vikram Manufacturing Pvt. Ltd.
-       └─ [KSPCB] Vikram Manufacturing
-       └─ [SHOP_EST] Vikram Manufacturing
+══ Stage 6 — Reviewer Decisions & Retraining ══
+  32 reviewer decisions captured (15 match, 17 non-match)
+  20 of 21 tiers received labelled hits → (m, u) updated
+
+══ Stage 7 — Re-scoring with Updated Params (Round 2) ══
+  AUTO_LINK : 30   REVIEW : 0   NO_LINK : 530
+  [Round 2] UBIDs=27  multi-record=9  PAN-anchored=21  review-queue=0
+
+  REVIEW-zone pair trajectory (before → after retraining):
+    SHOP_EST-00044 ⟷ FACTORIES-00045   p: 0.7462 → 0.6445  (-0.1017)   [REVIEW → NO_LINK]
 ```
 
-Concrete demonstration: `Vikram Manufacturing` appears in all 4 systems with the BWSSB record missing PAN. All 4 collapse into one **PAN-anchored** UBID. The BWSSB record inherits the PAN-anchored identifier via the union-find link.
+**Two concrete demonstrations:**
 
-The single REVIEW-zone pair (`Ravi Auto Parts` vs `Ravi Auto Spares`) lands at p=0.7521 — high name similarity and metaphone match, but conflicting pin and divergent addresses. Exactly the kind of case a human reviewer should adjudicate.
+1. **Cross-system clustering**: `Vikram Manufacturing` appears in all 4 systems with the BWSSB record missing PAN. All 4 collapse into one **PAN-anchored** UBID. The BWSSB record inherits the PAN-anchored identifier via the union-find link.
+
+2. **Active learning closing the loop**: The single REVIEW-zone pair (`Ravi Auto Parts` vs `Ravi Auto Spares`) lands at p=0.7462 in round 1 — high name similarity and metaphone match, but conflicting pin and divergent addresses. The reviewer marks it as a non-match. The trainer updates 20 of 21 tier (m, u) values via Bayesian Beta updating, and re-scoring drops the pair to p=0.6445 — moved into NO_LINK.
 
 ---
 
@@ -220,7 +272,8 @@ The single REVIEW-zone pair (`Ravi Auto Parts` vs `Ravi Auto Spares`) lands at p
 | §3.4 Splink probabilistic matching | `ProbabilisticMatcher` — Fellegi-Sunter log-odds, EM-ready m/u |
 | §3.5 Confidence calibration & thresholds | 0.95 / 0.70 thresholds, evidence trail per pair |
 | §3.5 UBID generation | `UBIDGenerator` — UUID v5, PAN-anchored namespace |
-| §4 Human-in-the-loop review | `UBIDRegistry.reviewQueue()`, JSON output, evidence cards in HTML |
+| §4.1 Reviewer interface | `ReviewerDecision` audit records, evidence cards in HTML |
+| §4.2 Active learning feedback loop | `ActiveLearningTrainer` — Bayesian (m, u) update, two-pass demo |
 | §5 Activity status classification | `ActivityClassifier` — rule-based with evidence timeline |
 | §6 Non-negotiables (no upstream writes, PII contained) | Read-only adapters, scrambled fields only past Stage 2 |
 

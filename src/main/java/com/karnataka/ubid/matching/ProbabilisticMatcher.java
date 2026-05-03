@@ -1,5 +1,6 @@
 package com.karnataka.ubid.matching;
 
+import com.karnataka.ubid.learning.MUParams;
 import com.karnataka.ubid.model.BusinessRecord;
 import com.karnataka.ubid.model.ScoredPair;
 
@@ -12,20 +13,21 @@ import java.util.Map;
 /**
  * Fellegi-Sunter style probabilistic matcher.
  *
- * Each feature has m and u probabilities (likelihood of agreement under
- * match / non-match). Per-pair we sum log(m/u) for agreed features and
- * log((1-m)/(1-u)) for disagreed features. The total log-odds is converted
- * to a posterior match probability via the logistic function.
+ * Each observation falls into exactly one tier per feature. The log-odds
+ * contribution for that tier is log(m/u) where (m, u) come from the
+ * supplied {@link MUParams}. Total log-odds → posterior probability via
+ * the logistic function.
  *
- * The m/u values here are hand-tuned plausible defaults that approximate
- * what Splink's EM step would estimate on Karnataka-shaped data. In a
- * production deployment these would be re-estimated weekly from reviewer
- * decisions (active-learning loop, see proposal section 4.2).
+ * MU values are externalised so the active-learning trainer can update
+ * them from reviewer decisions (proposal §4.2).
  */
 public final class ProbabilisticMatcher {
 
-    // Prior log-odds — most pairs are non-matches even after blocking
-    private static final double PRIOR_LOG_ODDS = Math.log(0.05 / 0.95);
+    private final MUParams params;
+
+    public ProbabilisticMatcher() { this(MUParams.defaults()); }
+
+    public ProbabilisticMatcher(MUParams params) { this.params = params; }
 
     public List<ScoredPair> score(List<BlockingEngine.CandidatePair> candidates) {
         List<ScoredPair> out = new ArrayList<>(candidates.size());
@@ -36,104 +38,76 @@ public final class ProbabilisticMatcher {
     }
 
     public ScoredPair scorePair(BusinessRecord a, BusinessRecord b) {
-        Map<String, ScoredPair.FeatureContribution> evidence = new LinkedHashMap<>();
-        double logOdds = PRIOR_LOG_ODDS;
+        Map<String, ScoredPair.FeatureContribution> ev = new LinkedHashMap<>();
+        double logOdds = MUParams.priorLogOdds();
 
-        // -------------------- PAN (strongest signal) -------------------- //
+        // -------------------- PAN -------------------- //
         if (a.scrambledPan() != null && b.scrambledPan() != null) {
-            if (a.scrambledPan().equals(b.scrambledPan())) {
-                logOdds += contrib(evidence, "pan", "exact match", 0.99, 0.0001);
-            } else {
-                logOdds += contribDisagree(evidence, "pan", "different values", 0.99, 0.0001);
-            }
+            String tier = a.scrambledPan().equals(b.scrambledPan()) ? "pan.match" : "pan.disagree";
+            String obs  = tier.equals("pan.match") ? "exact match" : "different values";
+            logOdds += emit(ev, "pan", tier, obs);
         } else {
-            evidence.put("pan", new ScoredPair.FeatureContribution(
-                    "pan", "not available in one or both systems", 0.0));
+            ev.put("pan", new ScoredPair.FeatureContribution(
+                    "pan", "pan.missing", "not available in one or both systems", 0.0));
         }
 
         // -------------------- GSTIN -------------------- //
         if (a.scrambledGstin() != null && b.scrambledGstin() != null) {
-            if (a.scrambledGstin().equals(b.scrambledGstin())) {
-                logOdds += contrib(evidence, "gstin", "exact match", 0.99, 0.0001);
-            } else {
-                logOdds += contribDisagree(evidence, "gstin", "different values", 0.99, 0.0001);
-            }
+            String tier = a.scrambledGstin().equals(b.scrambledGstin()) ? "gstin.match" : "gstin.disagree";
+            String obs  = tier.equals("gstin.match") ? "exact match" : "different values";
+            logOdds += emit(ev, "gstin", tier, obs);
         }
 
-        // -------------------- Name (Jaro-Winkler tiers) -------------------- //
-        double nameJw = StringSimilarity.jaroWinkler(
-                norm(a.scrambledName()), norm(b.scrambledName()));
-        if (nameJw >= 0.95) {
-            logOdds += contrib(evidence, "name", "near-identical (jw=" + fmt(nameJw) + ")", 0.85, 0.02);
-        } else if (nameJw >= 0.85) {
-            logOdds += contrib(evidence, "name", "high similarity (jw=" + fmt(nameJw) + ")", 0.65, 0.05);
-        } else if (nameJw >= 0.70) {
-            logOdds += contrib(evidence, "name", "moderate similarity (jw=" + fmt(nameJw) + ")", 0.30, 0.15);
-        } else {
-            logOdds += contribDisagree(evidence, "name", "low similarity (jw=" + fmt(nameJw) + ")", 0.85, 0.02);
-        }
+        // -------------------- Name (Jaro-Winkler) -------------------- //
+        double nameJw = StringSimilarity.jaroWinkler(norm(a.scrambledName()), norm(b.scrambledName()));
+        String nameTier =
+                nameJw >= 0.95 ? "name.near" :
+                nameJw >= 0.85 ? "name.high" :
+                nameJw >= 0.70 ? "name.moderate" : "name.low";
+        logOdds += emit(ev, "name", nameTier, "jw=" + fmt(nameJw));
 
-        // -------------------- Phonetic name (Metaphone) -------------------- //
+        // -------------------- Phonetic name -------------------- //
         String mA = Metaphone.encode(firstToken(a.scrambledName()));
         String mB = Metaphone.encode(firstToken(b.scrambledName()));
-        if (!mA.isEmpty() && mA.equals(mB)) {
-            logOdds += contrib(evidence, "name_phonetic", "metaphone match (" + mA + ")", 0.92, 0.10);
-        }
+        String phoneticTier = !mA.isEmpty() && mA.equals(mB) ? "name_phonetic.match" : "name_phonetic.no_match";
+        String phoneticObs  = phoneticTier.equals("name_phonetic.match") ? "match (" + mA + ")" : "no match";
+        logOdds += emit(ev, "name_phonetic", phoneticTier, phoneticObs);
 
         // -------------------- Pin code -------------------- //
-        if (a.pinCode() != null && a.pinCode().equals(b.pinCode())) {
-            logOdds += contrib(evidence, "pin_code", "exact match (" + a.pinCode() + ")", 0.95, 0.02);
-        } else {
-            logOdds += contribDisagree(evidence, "pin_code", "different pin codes", 0.95, 0.02);
-        }
+        String pinTier = a.pinCode() != null && a.pinCode().equals(b.pinCode()) ? "pin.agree" : "pin.disagree";
+        String pinObs  = pinTier.equals("pin.agree") ? "exact match (" + a.pinCode() + ")" : "different pin codes";
+        logOdds += emit(ev, "pin_code", pinTier, pinObs);
 
-        // -------------------- Address (n-gram Jaccard) -------------------- //
-        double addrJacc = StringSimilarity.ngramJaccard(
-                norm(a.scrambledAddress()), norm(b.scrambledAddress()), 3);
-        if (addrJacc >= 0.6) {
-            logOdds += contrib(evidence, "address", "high overlap (jacc=" + fmt(addrJacc) + ")", 0.80, 0.04);
-        } else if (addrJacc >= 0.3) {
-            logOdds += contrib(evidence, "address", "moderate overlap (jacc=" + fmt(addrJacc) + ")", 0.40, 0.10);
-        } else {
-            logOdds += contribDisagree(evidence, "address", "low overlap (jacc=" + fmt(addrJacc) + ")", 0.80, 0.04);
-        }
+        // -------------------- Address (3-gram Jaccard) -------------------- //
+        double addrJacc = StringSimilarity.ngramJaccard(norm(a.scrambledAddress()), norm(b.scrambledAddress()), 3);
+        String addrTier =
+                addrJacc >= 0.6 ? "address.high" :
+                addrJacc >= 0.3 ? "address.moderate" : "address.low";
+        logOdds += emit(ev, "address", addrTier, "jacc=" + fmt(addrJacc));
 
         // -------------------- Sector -------------------- //
-        if (a.sector() != null && a.sector().equalsIgnoreCase(b.sector())) {
-            logOdds += contrib(evidence, "sector", "same sector (" + a.sector() + ")", 0.85, 0.15);
-        } else {
-            logOdds += contribDisagree(evidence, "sector", "different sectors", 0.85, 0.15);
-        }
+        boolean sectorEq = a.sector() != null && a.sector().equalsIgnoreCase(b.sector());
+        String sectorTier = sectorEq ? "sector.agree" : "sector.disagree";
+        String sectorObs  = sectorEq ? "same sector (" + a.sector() + ")" : "different sectors";
+        logOdds += emit(ev, "sector", sectorTier, sectorObs);
 
-        // -------------------- Registration date (within window) -------------------- //
+        // -------------------- Registration date -------------------- //
         if (a.registrationDate() != null && b.registrationDate() != null) {
             long days = Math.abs(ChronoUnit.DAYS.between(a.registrationDate(), b.registrationDate()));
-            if (days <= 180) {
-                logOdds += contrib(evidence, "reg_date", "within 180 days (Δ=" + days + ")", 0.80, 0.10);
-            } else if (days <= 730) {
-                logOdds += contrib(evidence, "reg_date", "within 2 years (Δ=" + days + ")", 0.40, 0.20);
-            } else {
-                logOdds += contribDisagree(evidence, "reg_date", "Δ=" + days + " days", 0.80, 0.10);
-            }
+            String dateTier =
+                    days <= 180 ? "reg_date.close" :
+                    days <= 730 ? "reg_date.moderate" : "reg_date.far";
+            logOdds += emit(ev, "reg_date", dateTier, "Δ=" + days + " days");
         }
 
         double prob = 1.0 / (1.0 + Math.exp(-logOdds));
-        return ScoredPair.build(a, b, prob, evidence);
+        return ScoredPair.build(a, b, prob, ev);
     }
 
-    /* ----------------------- helpers ----------------------- */
-
-    private double contrib(Map<String, ScoredPair.FeatureContribution> ev,
-                           String name, String obs, double m, double u) {
-        double c = Math.log(m / u);
-        ev.put(name, new ScoredPair.FeatureContribution(name, obs, c));
-        return c;
-    }
-
-    private double contribDisagree(Map<String, ScoredPair.FeatureContribution> ev,
-                                   String name, String obs, double m, double u) {
-        double c = Math.log((1 - m) / (1 - u));
-        ev.put(name, new ScoredPair.FeatureContribution(name, obs, c));
+    private double emit(Map<String, ScoredPair.FeatureContribution> ev,
+                        String feature, String tierKey, String observation) {
+        double c = params.get(tierKey).logOdds();
+        ev.put(feature, new ScoredPair.FeatureContribution(feature, tierKey, observation, c));
         return c;
     }
 
@@ -147,7 +121,5 @@ public final class ProbabilisticMatcher {
         return sp < 0 ? s : s.substring(0, sp);
     }
 
-    private static String fmt(double d) {
-        return String.format("%.2f", d);
-    }
+    private static String fmt(double d) { return String.format("%.2f", d); }
 }
