@@ -1,7 +1,0 @@
-recordId,businessName,pan,gstin,address,pinCode,sector,phone,registrationDate
-SE001,Ramesh Textiles Pvt Ltd,ABCPR1234D,29ABCPR1234D1Z5,123 Commercial Street Bangalore,560001,Textiles,9876543210,2018-03-15
-SE002,M/s Kumar Electronics,XYZPK5678F,29XYZPK5678F1Z3,45 MG Road Bangalore,560001,Electronics,9845012345,2019-07-22
-SE003,City Bakery,DEFBC9012G,,Shop 5 Koramangala 4th Block,560034,Food,9988776655,2020-01-10
-SE004,Infosys Limited,INFPL0001A,29INFPL0001A1Z1,Electronics City Phase 1,560100,IT/Software,8000000001,2001-06-15
-SE005,Green Garden Nursery,,29GRDN00001A1Z2,Plot 12 Whitefield Road,560066,Agriculture,9123456789,2021-05-20
-SE006,Sunrise Garments,SRGAR5555H,,78 Shivajinagar Bangalore,560001,Textiles,9900112233,2017-09-08

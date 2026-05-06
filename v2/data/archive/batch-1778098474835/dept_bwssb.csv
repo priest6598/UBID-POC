@@ -1,6 +1,0 @@
-recordId,businessName,pan,gstin,address,pinCode,sector,phone,registrationDate
-BW001,Infosys Limited,INFPL0001A,,Electronics City Phase 1,560100,IT/Software,8000000001,2001-06-15
-BW002,Ramesh Textiles,ABCPR1234D,,Commercial Street,560001,Textiles,,2018-03-15
-BW003,Bangalore Steel Works,,, Peenya Industrial,560058,Manufacturing,9741235678,2015-11-30
-BW004,City Bakery & Confectionery,,,Koramangala Bangalore,560034,Food,9988776655,2020-01-10
-BW005,Kumar Elec,,XYZPK5678F,MG Road,560001,Electronics,,2019-07-22

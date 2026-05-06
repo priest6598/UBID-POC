@@ -7,6 +7,12 @@ target/
 
 # Generated reports / outputs
 output/
+data/
+
+#venv
+*venv/
+*.pyc
+__pycache__/
 
 # IDE
 .idea/
