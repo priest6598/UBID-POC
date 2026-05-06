@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>UBID Reviewer</title>
+<style>
+  :root {
+    --bg:     #1a1a2e;
+    --card:   #16213e;
+    --accent: #0f3460;
+    --hi:     #e94560;
+    --text:   #e0e0f0;
+    --muted:  #8888aa;
+    --border: #2a2a4a;
+    --green:  #28a745;
+    --yellow: #ffc107;
+    --orange: #fd7e14;
+    --red:    #dc3545;
+    --blue:   #17a2b8;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    height: 100vh; display: flex; flex-direction: column;
+  }
+
+  header {
+    background: var(--accent); padding: 14px 24px;
+    display: flex; align-items: center; gap: 12px;
+    border-bottom: 2px solid var(--hi); flex-shrink: 0;
+  }
+  header h1 { font-size: 1.2rem; font-weight: 700; }
+  header a { color: #aac; font-size: 0.82rem; text-decoration: none; margin-left: auto; }
+  header a:hover { color: #fff; }
+
+  .layout { display: flex; flex: 1; overflow: hidden; }
+
+  /* Sidebar */
+  .sidebar {
+    width: 300px; flex-shrink: 0;
+    background: var(--card); border-right: 1px solid var(--border);
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  .sidebar-header {
+    padding: 14px 16px; background: var(--accent);
+    font-size: 0.8rem; font-weight: 600; text-transform: uppercase;
+    letter-spacing: 0.5px; color: #cce; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .sidebar-count {
+    background: var(--hi); color: #fff;
+    padding: 2px 8px; border-radius: 12px; font-size: 0.75rem;
+  }
+  .sidebar-list { flex: 1; overflow-y: auto; padding: 8px; }
+  .queue-item {
+    padding: 12px 14px; border-radius: 8px; cursor: pointer;
+    margin-bottom: 6px; border: 1px solid transparent;
+    transition: border-color 0.2s, background 0.2s;
+  }
+  .queue-item:hover { background: rgba(233,69,96,0.08); border-color: var(--hi); }
+  .queue-item.selected { background: rgba(233,69,96,0.15); border-color: var(--hi); }
+  .queue-item.reviewed { opacity: 0.45; }
+  .item-names { font-size: 0.85rem; font-weight: 600; margin-bottom: 4px; }
+  .item-score-row { display: flex; align-items: center; gap: 8px; }
+  .score-pill {
+    font-size: 0.75rem; font-weight: 700; padding: 2px 8px; border-radius: 12px;
+  }
+  .score-high   { background: var(--yellow); color: #111; }
+  .score-medium { background: var(--orange); color: #fff; }
+  .item-depts { font-size: 0.75rem; color: var(--muted); }
+
+  /* Main panel */
+  .main-panel { flex: 1; overflow-y: auto; padding: 24px; }
+
+  /* Empty state */
+  .empty-state {
+    display: flex; flex-direction: column; align-items: center;
+    justify-content: center; height: 100%; gap: 16px; color: var(--muted);
+  }
+  .checkmark { font-size: 4rem; color: var(--green); }
+
+  /* Review card */
+  .review-card {
+    background: var(--card); border-radius: 12px;
+    border: 1px solid var(--border); overflow: hidden;
+    max-width: 900px; margin: 0 auto;
+  }
+  .review-header {
+    background: var(--accent); padding: 16px 24px;
+    display: flex; align-items: center; gap: 16px;
+  }
+  .review-title { font-size: 1.1rem; font-weight: 700; flex: 1; }
+  .score-badge {
+    font-size: 1rem; font-weight: 700; padding: 6px 16px;
+    border-radius: 8px; letter-spacing: 0.5px;
+  }
+
+  .comparison-section { padding: 20px 24px; border-bottom: 1px solid var(--border); }
+  .comparison-section h3 { font-size: 0.8rem; color: var(--muted);
+    text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 14px; }
+
+  table.compare-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+  table.compare-table th {
+    background: var(--accent); padding: 8px 12px; text-align: left;
+    font-size: 0.75rem; text-transform: uppercase; color: #aac;
+    letter-spacing: 0.3px; font-weight: 600;
+  }
+  table.compare-table td {
+    padding: 8px 12px; border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  table.compare-table tr:last-child td { border-bottom: none; }
+  table.compare-table .field-label {
+    color: var(--muted); font-size: 0.78rem; font-weight: 600;
+    text-transform: uppercase; width: 110px; white-space: nowrap;
+  }
+  table.compare-table .match-cell { background: rgba(40,167,69,0.08); }
+  table.compare-table .diff-cell  { background: rgba(220,53,69,0.06); }
+
+  /* Feature scores */
+  .feature-section { padding: 20px 24px; border-bottom: 1px solid var(--border); }
+  .feature-section h3 { font-size: 0.8rem; color: var(--muted);
+    text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 14px; }
+  .feature-row {
+    display: flex; align-items: center; gap: 10px; margin-bottom: 10px; font-size: 0.82rem;
+  }
+  .feature-label { width: 90px; color: var(--muted); text-transform: uppercase; font-size: 0.75rem; }
+  .feature-bar-wrap { flex: 1; background: var(--border); border-radius: 4px; height: 16px; overflow: hidden; }
+  .feature-bar { height: 100%; border-radius: 4px; transition: width 0.4s; }
+  .bar-green  { background: var(--green); }
+  .bar-yellow { background: var(--yellow); }
+  .bar-red    { background: var(--red); }
+  .feature-pct { width: 42px; text-align: right; font-weight: 600; }
+
+  /* Evidence */
+  .evidence-section { padding: 16px 24px; border-bottom: 1px solid var(--border); }
+  .evidence-text { font-size: 0.85rem; color: var(--muted); font-style: italic; }
+
+  /* Decision section */
+  .decision-section { padding: 20px 24px; }
+  .decision-section h3 { font-size: 0.8rem; color: var(--muted);
+    text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 12px; }
+  textarea.review-note {
+    width: 100%; background: var(--bg); border: 1px solid var(--border);
+    border-radius: 8px; color: var(--text); padding: 10px 14px;
+    font-family: inherit; font-size: 0.85rem; resize: vertical; min-height: 72px;
+    margin-bottom: 14px;
+  }
+  textarea.review-note:focus { outline: none; border-color: var(--hi); }
+  .decision-buttons { display: flex; gap: 12px; }
+  .btn {
+    flex: 1; padding: 12px; border: none; border-radius: 8px;
+    font-size: 1rem; font-weight: 700; cursor: pointer; transition: opacity 0.2s;
+  }
+  .btn:hover { opacity: 0.85; }
+  .btn-match   { background: var(--green); color: #fff; }
+  .btn-nomatch { background: var(--red);   color: #fff; }
+  .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  /* Confirmation */
+  .confirm-banner {
+    margin: 20px 24px; padding: 12px 16px; border-radius: 8px;
+    font-size: 0.9rem; font-weight: 600; display: none;
+  }
+  .confirm-match   { background: rgba(40,167,69,0.2); color: #6de696; border: 1px solid var(--green); }
+  .confirm-nomatch { background: rgba(220,53,69,0.2); color: #ff9999; border: 1px solid var(--red); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>UBID Reviewer</h1>
+  <span style="color:var(--muted);font-size:0.85rem">Human-in-the-loop entity resolution</span>
+  <a href="/">&#8592; Back to Dashboard</a>
+</header>
+
+<div class="layout">
+  <!-- Sidebar -->
+  <div class="sidebar">
+    <div class="sidebar-header">
+      Review Queue
+      <span class="sidebar-count" id="queue-count">0</span>
+    </div>
+    <div class="sidebar-list" id="queue-list">
+      <div style="padding:20px;color:var(--muted);font-size:0.85rem;text-align:center;">Loading...</div>
+    </div>
+  </div>
+
+  <!-- Main panel -->
+  <div class="main-panel" id="main-panel">
+    <div class="empty-state" id="empty-state" style="display:none;">
+      <div class="checkmark">&#10003;</div>
+      <div style="font-size:1.2rem;color:var(--text);font-weight:600;">All Reviews Complete</div>
+      <div>No pending items in the review queue.</div>
+    </div>
+
+    <div id="review-area"></div>
+  </div>
+</div>
+
+<script>
+let queueItems = [];
+let selectedId = null;
+
+async function loadQueue() {
+  try {
+    const r = await fetch('/api/queue');
+    const items = await r.json();
+    queueItems = items;
+    renderSidebar();
+    // If current selection is gone or nothing selected, pick first pending
+    const pending = items.filter(i => i.status === 'PENDING');
+    if (!selectedId && pending.length > 0) selectItem(pending[0].id);
+    else if (selectedId) renderReview(selectedId);
+  } catch(e) {
+    console.error('Queue load failed:', e);
+  }
+}
+
+function renderSidebar() {
+  const list  = document.getElementById('queue-list');
+  const count = document.getElementById('queue-count');
+  const pending = queueItems.filter(i => i.status === 'PENDING');
+  count.textContent = pending.length;
+
+  if (queueItems.length === 0) {
+    list.innerHTML = '<div style="padding:20px;color:var(--muted);font-size:0.85rem;text-align:center;">Queue is empty</div>';
+    showEmptyState();
+    return;
+  }
+
+  list.innerHTML = queueItems.map(item => {
+    const score = Math.round((item.score || 0) * 100);
+    const scoreClass = score >= 75 ? 'score-high' : 'score-medium';
+    const reviewed = item.status !== 'PENDING';
+    return `<div class="queue-item${selectedId === item.id ? ' selected' : ''}${reviewed ? ' reviewed' : ''}"
+                 onclick="selectItem('${item.id}')">
+      <div class="item-names">
+        ${esc(item.record1?.businessName || '?')}
+        <span style="color:var(--muted);font-weight:400"> vs </span>
+        ${esc(item.record2?.businessName || '?')}
+      </div>
+      <div class="item-score-row">
+        <span class="score-pill ${scoreClass}">${score}%</span>
+        ${reviewed ? `<span style="color:var(--green);font-size:0.75rem;">&#10003; ${item.decision || 'reviewed'}</span>` : ''}
+      </div>
+      <div class="item-depts">${esc(item.record1?.source || '')} &rarr; ${esc(item.record2?.source || '')}</div>
+    </div>`;
+  }).join('');
+
+  // If all reviewed, show empty state in main
+  if (pending.length === 0) showEmptyState();
+}
+
+function showEmptyState() {
+  document.getElementById('empty-state').style.display = 'flex';
+  document.getElementById('review-area').innerHTML = '';
+}
+
+function selectItem(id) {
+  selectedId = id;
+  document.getElementById('empty-state').style.display = 'none';
+  renderSidebar();
+  renderReview(id);
+}
+
+function renderReview(id) {
+  const item = queueItems.find(i => i.id === id);
+  if (!item) return;
+
+  const r1 = item.record1 || {};
+  const r2 = item.record2 || {};
+  const score = Math.round((item.score || 0) * 100);
+  const scoreClass = score >= 75 ? 'score-high' : 'score-medium';
+  const features = item.features || {};
+  const isPending = item.status === 'PENDING';
+
+  const FIELDS = [
+    ['businessName', 'Business Name'],
+    ['pan',          'PAN'],
+    ['gstin',        'GSTIN'],
+    ['address',      'Address'],
+    ['pinCode',      'Pin Code'],
+    ['sector',       'Sector'],
+    ['phone',        'Phone'],
+    ['source',       'Department'],
+  ];
+
+  const rows = FIELDS.map(([key, label]) => {
+    const v1 = r1[key] || '';
+    const v2 = r2[key] || '';
+    const match = v1 && v2 && v1.toLowerCase() === v2.toLowerCase();
+    return `<tr>
+      <td class="field-label">${label}</td>
+      <td class="${match ? 'match-cell' : ''}">${esc(v1) || '<span style="color:var(--muted)">—</span>'}</td>
+      <td class="${match ? 'match-cell' : (v1 && v2 ? 'diff-cell' : '')}">${esc(v2) || '<span style="color:var(--muted)">—</span>'}</td>
+    </tr>`;
+  }).join('');
+
+  const featureRows = Object.entries(features).map(([k, v]) => {
+    const pct = Math.round(v * 100);
+    const barClass = v >= 0.7 ? 'bar-green' : (v >= 0.5 ? 'bar-yellow' : 'bar-red');
+    return `<div class="feature-row">
+      <div class="feature-label">${k}</div>
+      <div class="feature-bar-wrap">
+        <div class="feature-bar ${barClass}" style="width:${pct}%"></div>
+      </div>
+      <div class="feature-pct">${pct}%</div>
+    </div>`;
+  }).join('');
+
+  const disabledAttr = isPending ? '' : 'disabled';
+  const decisionInfo = isPending ? '' : `
+    <div class="confirm-banner confirm-${item.decision === 'MATCH' ? 'match' : 'nomatch'}" style="display:block;">
+      Decision: ${item.decision} ${item.reviewNote ? '— ' + esc(item.reviewNote) : ''}
+    </div>`;
+
+  document.getElementById('review-area').innerHTML = `
+    <div class="review-card">
+      <div class="review-header">
+        <div class="review-title">Review Decision</div>
+        <div class="score-badge ${scoreClass}">${score}% Match</div>
+      </div>
+
+      ${decisionInfo}
+
+      <div class="comparison-section">
+        <h3>Side-by-Side Comparison</h3>
+        <table class="compare-table">
+          <thead>
+            <tr>
+              <th>Field</th>
+              <th>${esc(r1.source || 'Record 1')}</th>
+              <th>${esc(r2.source || 'Record 2')}</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+
+      <div class="feature-section">
+        <h3>Feature Agreement Scores</h3>
+        ${featureRows}
+      </div>
+
+      <div class="evidence-section">
+        <h3>Evidence</h3>
+        <div class="evidence-text">${esc(item.evidence || 'No evidence')}</div>
+      </div>
+
+      <div class="decision-section">
+        <h3>Your Decision</h3>
+        <textarea class="review-note" id="reviewer-note" placeholder="Add a note (optional)..." ${disabledAttr}>${esc(item.reviewNote || '')}</textarea>
+        <div class="decision-buttons">
+          <button class="btn btn-match" onclick="submitDecision('${id}', 'MATCH')" ${disabledAttr}>
+            &#10003; Same Business
+          </button>
+          <button class="btn btn-nomatch" onclick="submitDecision('${id}', 'NO_MATCH')" ${disabledAttr}>
+            &#10007; Different Business
+          </button>
+        </div>
+      </div>
+    </div>`;
+}
+
+async function submitDecision(id, decision) {
+  const note = document.getElementById('reviewer-note')?.value || '';
+  try {
+    const r = await fetch('/api/review', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, decision, note })
+    });
+    if (!r.ok) { alert('Error submitting review'); return; }
+
+    // Optimistically update local item
+    const item = queueItems.find(i => i.id === id);
+    if (item) { item.status = 'REVIEWED'; item.decision = decision; item.reviewNote = note; }
+
+    // Auto-advance to next pending
+    await loadQueue();
+    const pending = queueItems.filter(i => i.status === 'PENDING');
+    if (pending.length > 0) selectItem(pending[0].id);
+    else { selectedId = null; showEmptyState(); renderSidebar(); }
+  } catch(e) {
+    alert('Failed to submit: ' + e.message);
+  }
+}
+
+function esc(s) {
+  return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+loadQueue();
+setInterval(loadQueue, 5000);
+</script>
+</body>
+</html>

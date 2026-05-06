@@ -1,0 +1,6 @@
+recordId,businessName,pan,gstin,address,pinCode,sector,phone,registrationDate
+FA001,Ramesh Tex Pvt Ltd,ABCPR1234D,29ABCPR1234D1Z5,123 Commercial St Bangalore,560001,Textiles,9876543210,2018-03-15
+FA002,Bangalore Steel Works Ltd,BSWLT2222K,,Plot 44 Peenya Industrial Area,560058,Manufacturing,9741235678,2015-11-30
+FA003,Infosys Ltd,INFPL0001A,29INFPL0001A1Z1,Electronics City Phase 1 Bangalore,560100,IT/Software,8000000001,2001-06-15
+FA004,ABC Chemicals Pvt Ltd,,29ABCC00001A1Z3,Survey No 15 Bommasandra,560099,Chemicals,9632587410,2016-04-18
+FA005,Sunrise Garments & Co,SRGAR5555H,,78 Shivajinagar,560001,Textiles,,2017-09-08

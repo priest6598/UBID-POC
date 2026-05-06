@@ -1,0 +1,6 @@
+recordId,businessName,pan,gstin,address,pinCode,sector,phone,registrationDate
+KS001,Kumar Electronics,XYZPK5678F,,45 MG Road Bengaluru,560001,Electronics,9845012345,2019-07-22
+KS002,B.S. Works,,,Peenya Industrial Area Bangalore,560058,Manufacturing,9741235678,2015-11-30
+KS003,Infosys Limited,INFPL0001A,29INFPL0001A1Z1,Electronics City,560100,IT/Software,8000000002,2001-06-15
+KS004,ABC Chem Pvt Ltd,,29ABCC00001A1Z3,Bommasandra Industrial Area,560099,Chemicals,9632587410,2016-04-18
+KS005,Green Farms,,29GRDN00002A1Z9,Whitefield Bangalore,560066,Agriculture,,2022-01-15
